@@ -1,0 +1,65 @@
+[
+  {
+    "name": "Magnetite Fe3O4",
+    "Ms_kA_m": 480,
+    "K_kJ_m3": 20,
+    "rho_kg_m3": 5170,
+    "note": "Bulk Ms. Nanoparticle Ms is usually lower (surface spin canting). K is a typical effective value; bulk K1 is about -11 kJ/m3 (cubic)."
+  },
+  {
+    "name": "Maghemite gamma-Fe2O3",
+    "Ms_kA_m": 370,
+    "K_kJ_m3": 15,
+    "rho_kg_m3": 4900,
+    "note": "Typical bulk Ms; effective K varies widely with size and shape."
+  },
+  {
+    "name": "Cobalt ferrite CoFe2O4",
+    "Ms_kA_m": 425,
+    "K_kJ_m3": 200,
+    "rho_kg_m3": 5290,
+    "note": "Typical bulk Ms; effective K is large and depends strongly on synthesis (100-300 kJ/m3 is common)."
+  },
+  {
+    "name": "Manganese ferrite MnFe2O4",
+    "Ms_kA_m": 400,
+    "K_kJ_m3": 5,
+    "rho_kg_m3": 5000,
+    "note": "Typical bulk Ms; small anisotropy."
+  },
+  {
+    "name": "Nickel ferrite NiFe2O4",
+    "Ms_kA_m": 270,
+    "K_kJ_m3": 7,
+    "rho_kg_m3": 5380,
+    "note": "Typical bulk Ms; small anisotropy."
+  },
+  {
+    "name": "Iron (bcc) Fe",
+    "Ms_kA_m": 1710,
+    "K_kJ_m3": 48,
+    "rho_kg_m3": 7874,
+    "note": "Bulk Ms and K1; an oxide shell lowers the measured Ms."
+  },
+  {
+    "name": "Cobalt (hcp) Co",
+    "Ms_kA_m": 1400,
+    "K_kJ_m3": 450,
+    "rho_kg_m3": 8900,
+    "note": "Bulk hcp values. fcc Co nanoparticles have a much smaller K."
+  },
+  {
+    "name": "Nickel Ni",
+    "Ms_kA_m": 485,
+    "K_kJ_m3": 5,
+    "rho_kg_m3": 8908,
+    "note": "Bulk Ms; effective K depends on shape and strain."
+  },
+  {
+    "name": "CoNi alloy (placeholder)",
+    "Ms_kA_m": 950,
+    "K_kJ_m3": 30,
+    "rho_kg_m3": 8900,
+    "note": "PLACEHOLDER. Replace with measured values for your alloy."
+  }
+]
