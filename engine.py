@@ -275,26 +275,25 @@ def vsm_field(H_max: float, loop_time: float, steps: int = 3000):
 # --------------------------------------------------------------------------
 # Quantities read off a loop (the same ones you read off a measurement)
 # --------------------------------------------------------------------------
-def _zero_crossings(x, y):
-    """x values where y changes sign (linear interpolation)."""
-    s = np.sign(y)
-    i = np.where(s[:-1] * s[1:] < 0)[0]
+def _at_zero_of(x, y):
+    """Values of y at the points where x crosses zero (linear interpolation).
+    A sample that sits exactly on zero counts as non-negative, so a crossing is never missed."""
+    pos = x >= 0
+    i = np.where(pos[:-1] != pos[1:])[0]
     if len(i) == 0:
         return np.array([])
-    return x[i] - y[i] * (x[i + 1] - x[i]) / (y[i + 1] - y[i])
+    t = -x[i] / (x[i + 1] - x[i])
+    return y[i] + t * (y[i + 1] - y[i])
 
 
 def loop_metrics(H, m, Ms):
     """Coercivity, remanence, saturation reached and loop area for a closed loop."""
-    Hc = _zero_crossings(H, m)
-    # m at H = 0 : interpolate the other way round
-    s = np.sign(H)
-    i = np.where(s[:-1] * s[1:] < 0)[0]
-    mr_vals = m[i] - H[i] * (m[i + 1] - m[i]) / (H[i + 1] - H[i]) if len(i) else np.array([])
+    Hc = _at_zero_of(m, H)               # field where M = 0
+    mr = _at_zero_of(H, m)               # M where H = 0
     area = abs(MU0 * np.sum(0.5 * (m[1:] + m[:-1]) * Ms * np.diff(H)))      # J/m^3 per loop
     return dict(
         Hc=float(np.mean(np.abs(Hc))) if len(Hc) else 0.0,                  # A/m
-        mr=float(np.mean(np.abs(mr_vals))) if len(mr_vals) else 0.0,        # M_r / Ms
+        mr=float(np.mean(np.abs(mr))) if len(mr) else 0.0,                  # M_r / Ms
         sat=float(np.max(np.abs(m))),                                       # M_max / Ms
         area=float(area),                                                   # J/m^3 per cycle
     )

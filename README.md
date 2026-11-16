@@ -2,6 +2,8 @@
 
 Enter the material, particles, sample and field. The app draws the magnetisation loop an AC magnetometer or a VSM would record
 (low-field ellipse, high-field hysteresis loop), plus Hc, Mr, saturation reached, energy per cycle and SAR.
+A two-phase option adds a soft and a hard material by mass (for example nickel zinc ferrite + barium hexaferrite).
+Moments are shown in emu/g of the whole sample by default, which is what the VSM software reports.
 
 ## Files
 | File | Job |

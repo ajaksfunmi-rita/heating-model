@@ -1,7 +1,8 @@
 """
 app.py  -  the interface (no physics in here)
 =============================================
-Pattern: read the widgets -> build a Sample -> call engine.run_ac / engine.run_vsm -> plot.
+Pattern: read the widgets -> build one Sample per magnetic phase -> call engine.run_ac / engine.run_vsm
+for each phase -> add the loops (weighted by mass) -> plot.
 All physics lives in engine.py.
 
 Run locally:   streamlit run app.py
@@ -20,7 +21,7 @@ from plotly.subplots import make_subplots
 import engine as eng
 
 MU0 = eng.MU0
-INK, TEAL, SLATE, AMBER = "#1F2A44", "#0B7A75", "#6B7A90", "#B7791F"
+INK, TEAL, SLATE, AMBER, PLUM = "#1F2A44", "#0B7A75", "#6B7A90", "#B7791F", "#7A3E8E"
 
 st.set_page_config(page_title="Nanoparticle hysteresis simulator", page_icon="🧲", layout="wide")
 st.markdown("<style>.block-container{padding-top:2.2rem;max-width:1250px}</style>", unsafe_allow_html=True)
@@ -29,71 +30,70 @@ st.markdown("<style>.block-container{padding-top:2.2rem;max-width:1250px}</style
 DB = json.loads((Path(__file__).with_name("materials.json")).read_text(encoding="utf-8"))
 CUSTOM = dict(name="Custom material", Ms_kA_m=400.0, K_kJ_m3=20.0, rho_kg_m3=5000.0,
               note="Enter your own values. Ms from your VSM plateau; K is the effective uniaxial anisotropy.")
+NAMES = [m["name"] for m in DB] + [CUSTOM["name"]]
 
 # ------------------------------------------------------------------ units
 FIELD_UNITS = {"mT": 1e3, "Oe": 1e4}                       # mu0*H in tesla x factor
-MOMENT_UNITS = ["M / Ms", "emu/g", "emu (whole sample)"]
-
-
-def field_to_display(H_Apm, unit):
-    return np.asarray(H_Apm) * MU0 * FIELD_UNITS[unit]
-
-
-def moment_to_display(M_Apm, unit, p):
-    M = np.asarray(M_Apm)
-    if unit == "M / Ms":
-        return M / p["Ms"]
-    if unit == "emu/g":
-        return M / p["rho"]                                  # A/m / (kg/m3) = A m2/kg = emu/g
-    return M / p["rho"] * p["mag_mass_g"]
-
-
-def moment_label(unit):
-    return {"M / Ms": "Magnetisation M / Ms", "emu/g": "Magnetisation (emu/g of magnetic phase)",
-            "emu (whole sample)": "Moment of the whole sample (emu)"}[unit]
+MOMENT_UNITS = ["emu/g (whole sample)", "emu (whole sample)", "emu/g (magnetic material)", "M / Ms"]
+SUFFIX = {"emu/g (whole sample)": "emu/g", "emu (whole sample)": "emu", "emu/g (magnetic material)": "emu/g", "M / Ms": "Ms"}
+LABEL = {"emu/g (whole sample)": "Moment per gram of sample (emu/g)", "emu (whole sample)": "Moment of the whole sample (emu)",
+         "emu/g (magnetic material)": "Moment per gram of magnetic material (emu/g)", "M / Ms": "Fraction of full saturation (M / Ms)"}
 
 
 def fmt(x, digits=3):
     return f"{x:.{digits}g}"
 
 
-# ------------------------------------------------------------------ sidebar
-with st.sidebar:
-    st.header("Inputs")
+def field_to_display(H_Apm, unit):
+    return np.asarray(H_Apm) * MU0 * FIELD_UNITS[unit]
 
-    st.subheader("Material")
-    names = [m["name"] for m in DB] + [CUSTOM["name"]]
-    choice = st.selectbox("Material", names, help="Fills in typical values. Overwrite them with your own measurements.")
+
+# ------------------------------------------------------------------ sidebar
+def phase_inputs(tag, title, default_name, default_D, default_sigma):
+    """Material + particle widgets for one magnetic phase."""
+    st.subheader(title)
+    choice = st.selectbox("Material", NAMES, index=NAMES.index(default_name), key=f"mat_{tag}",
+                          help="Fills in typical values. Overwrite them with your own measurements.")
     base = next((m for m in DB if m["name"] == choice), CUSTOM)
     Ms_k = st.number_input("Saturation magnetisation Ms (kA/m)", 10.0, 2000.0, float(base["Ms_kA_m"]), 5.0,
-                           key=f"Ms_{choice}", help="Read it from the high-field plateau of your VSM loop, per volume of magnetic material.")
+                           key=f"Ms_{tag}_{choice}", help="Per volume of this magnetic material. The VSM plateau only gives it if the sample really saturates.")
     K_k = st.number_input("Effective anisotropy K (kJ/m³)", 0.1, 1000.0, float(base["K_kJ_m3"]), 1.0,
-                          key=f"K_{choice}", help="One effective uniaxial number. It also absorbs shape, surface and interaction effects.")
-    rho = st.number_input("Density (kg/m³)", 1000.0, 20000.0, float(base["rho_kg_m3"]), 10.0, key=f"rho_{choice}")
+                          key=f"K_{tag}_{choice}", help="One effective uniaxial number. It also absorbs shape, surface and interaction effects.")
+    rho = st.number_input("Density (kg/m³)", 1000.0, 20000.0, float(base["rho_kg_m3"]), 10.0, key=f"rho_{tag}_{choice}")
     st.caption(f"Ms = {Ms_k * 1e3 / rho:.0f} emu/g.  {base['note']}")
-
-    st.subheader("Particles")
-    D_nm = st.slider("Median diameter (nm)", 3.0, 45.0, 12.0, 0.5, help="From TEM.")
-    sigma = st.slider("Size spread σ (log-normal)", 0.0, 0.6, 0.20, 0.01,
+    D_nm = st.slider("Median diameter (nm)", 3.0, 100.0, float(default_D), 0.5, key=f"D_{tag}", help="From TEM, or an assumption if unknown.")
+    sigma = st.slider("Size spread σ (log-normal)", 0.0, 0.6, float(default_sigma), 0.01, key=f"s_{tag}",
                       help="Width of ln(D). About 0.1 is very narrow, 0.3 is broad. 0 = every particle the same size.")
+    return dict(name=choice, Ms=Ms_k * 1e3, K=K_k * 1e3, rho=rho, D=D_nm * 1e-9, sigma=sigma)
+
+
+with st.sidebar:
+    st.header("Inputs")
+    two = st.toggle("Two-phase sample (soft + hard)", value=False,
+                    help="For a mixture of two magnetic materials, for example nickel zinc ferrite + barium hexaferrite. "
+                         "Each phase gets its own inputs and the two loops are added by mass.")
+    ph1 = phase_inputs("1", "Phase 1 (soft)" if two else "Material and particles", "Nickel zinc ferrite NiZnFe2O4", 12.0, 0.20)
+    ph2 = phase_inputs("2", "Phase 2 (hard)", "Barium hexaferrite BaFe12O19 (Sc-substituted)", 30.0, 0.30) if two else None
 
     st.subheader("Sample")
-    mass_mg = st.number_input("Powder mass (mg)", 0.01, 1000.0, 1.0, 0.1)
-    frac = st.number_input("Magnetic fraction (%)", 1.0, 100.0, 100.0, 1.0,
-                           help="Less than 100 if the particles sit on a support such as CNC/CNF or in sugar.")
+    mass_mg = st.number_input("Total sample mass (mg)", 0.01, 1000.0, 3.584, 0.1,
+                              help="Everything that was weighed: magnetic powder plus sugar or other support.")
+    frac = st.number_input("Magnetic fraction (% of sample mass)", 1.0, 100.0, 100.0, 1.0,
+                           help="100 for pure powder. Less if the particles sit in sugar or on a support such as CNC/CNF.")
+    share2 = st.slider("Hard phase share of the magnetic mass (%)", 0, 100, 50, 1) if two else 0
     T = st.number_input("Temperature (K)", 4.0, 700.0, 300.0, 5.0)
 
     st.subheader("Measurement")
-    mode_label = st.radio("Instrument", ["AC magnetometer", "VSM"], horizontal=True)
+    mode_label = st.radio("Instrument", ["VSM", "AC magnetometer"], horizontal=True)
     mode = "ac" if mode_label == "AC magnetometer" else "vsm"
     if mode == "ac":
         amp_mT = st.slider("Field amplitude μ₀H (mT)", 1.0, 150.0, 30.0, 1.0)
         freq_kHz = st.number_input("Frequency (kHz)", 0.1, 2000.0, 100.0, 10.0)
-        hmax_T, loop_time = 1.5, 600.0
+        hmax_T, loop_time = 1.0, 474.0
     else:
-        hmax_T = st.slider("Maximum field (T)", 0.1, 5.0, 1.5, 0.1)
-        loop_time = st.number_input("Time for one full loop (s)", 30.0, 7200.0, 600.0, 30.0,
-                                    help="Slower sweeps give particles more time to relax.")
+        hmax_T = st.slider("Maximum field (T)", 0.1, 5.0, 1.0, 0.1, help="1 T = 10 kOe.")
+        loop_time = st.number_input("Time for one full loop (s)", 30.0, 7200.0, 474.0, 30.0,
+                                    help="Elapsed time shown by the VSM software. Slower sweeps give particles more time to relax.")
         amp_mT, freq_kHz = 30.0, 100.0
 
     with st.expander("Advanced"):
@@ -104,11 +104,26 @@ with st.sidebar:
 
     st.subheader("Display")
     f_unit = st.radio("Field unit", list(FIELD_UNITS), horizontal=True)
-    m_unit = st.radio("Magnetisation unit", MOMENT_UNITS)
+    m_unit = st.radio("Moment unit", MOMENT_UNITS, help="The VSM software reports emu/g of the whole sample.")
 
-P = dict(Ms=Ms_k * 1e3, K=K_k * 1e3, rho=rho, D=D_nm * 1e-9, sigma=sigma, T=T, f0=f0,
-         mag_mass_g=mass_mg * 1e-3 * frac / 100.0)
-sample = eng.Sample(Ms=P["Ms"], K=P["K"], D_mean=P["D"], sigma=sigma, rho=rho, T=T, f0=f0)
+# ------------------------------------------------------------------ assemble the phases
+frac_tot = frac / 100.0
+ph1["f"] = frac_tot * (1.0 - share2 / 100.0)
+phases = [ph1] + ([dict(ph2, f=frac_tot * share2 / 100.0)] if two else [])
+mass_g = mass_mg * 1e-3
+G_sat = sum(p["f"] * p["Ms"] / p["rho"] for p in phases)       # full saturation, emu/g of sample
+f_sum = sum(p["f"] for p in phases)
+
+
+def sample_of(p):
+    return eng.Sample(Ms=p["Ms"], K=p["K"], D_mean=p["D"], sigma=p["sigma"], rho=p["rho"], T=T, f0=f0)
+
+
+def G_disp(G, unit):
+    """emu/g of whole sample -> chosen display unit."""
+    G = np.asarray(G)
+    return {"emu/g (whole sample)": G, "emu (whole sample)": G * mass_g,
+            "emu/g (magnetic material)": G / frac_tot, "M / Ms": G / G_sat}[unit]
 
 
 # ------------------------------------------------------------------ cached simulations
@@ -130,16 +145,24 @@ def cached_series(Ms, K, D, sigma, rho, T, f0, amps_Apm, freq, cycles):
     return out
 
 
+def stats(H, G):
+    """Hc (A/m), remanence (emu/g of sample) and peak (fraction of full saturation) of a combined loop."""
+    hc = eng._at_zero_of(G, H)
+    mr = eng._at_zero_of(H, G)
+    return (float(np.mean(np.abs(hc))) if len(hc) else 0.0,
+            float(np.mean(np.abs(mr))) if len(mr) else 0.0,
+            float(np.max(np.abs(G)) / G_sat))
+
+
 # ------------------------------------------------------------------ header
 st.title("Nanoparticle hysteresis simulator")
-st.write("Describe the powder and the field. The model draws the magnetisation loop that an AC magnetometer or a VSM "
+st.write("Describe the powder and the field. The model draws the magnetisation loop that a VSM or an AC magnetometer "
          "would record, from one set of equations, so the same sample parameters give the low-field ellipse and the "
-         "high-field hysteresis loop.")
+         "high-field hysteresis loop. Switch on the two-phase option for a soft + hard mixture.")
 
 tab_loop, tab_series, tab_how = st.tabs(["Loop", "Several fields", "How it works"])
 
 
-# ================================================================== TAB 1
 def parse_upload(file):
     raw = file.getvalue().decode("utf-8", errors="ignore")
     if "[Data]" in raw:                                        # e.g. Quantum Design exports
@@ -151,52 +174,55 @@ def parse_upload(file):
     return df
 
 
+# ================================================================== TAB 1
 with tab_loop:
     H_Apm = amp_mT * 1e-3 / MU0 if mode == "ac" else hmax_T / MU0
     with st.spinner("Simulating…"):
-        run = cached_run(mode, P["Ms"], P["K"], P["D"], sigma, rho, T, f0, H_Apm, freq_kHz * 1e3, loop_time, cycles)
-    met = run.metrics
-    reg = eng.regime(sample, 1.0 / (freq_kHz * 1e3) if mode == "ac"
-                     else sample.Hk * loop_time / (4.0 * H_Apm))
-    t_txt = f"{1e3 / freq_kHz:.3g} µs" if mode == "ac" else f"{sample.Hk * loop_time / (4.0 * H_Apm):.3g} s"
+        runs = [cached_run(mode, p["Ms"], p["K"], p["D"], p["sigma"], p["rho"], T, f0, H_Apm, freq_kHz * 1e3, loop_time, cycles)
+                for p in phases]
+    run0 = runs[0]
+    H, loop = run0.H, run0.loop
+    G_parts = [p["f"] * r.M / p["rho"] for p, r in zip(phases, runs)]      # emu/g of whole sample
+    G = np.sum(G_parts, axis=0)
+    Hc, Mr, sat = stats(H[loop], G[loop])
+    energy = sum(p["f"] * r.metrics["area"] / p["rho"] for p, r in zip(phases, runs)) / f_sum        # mJ/g of magnetic material
+    sar = sum(p["f"] * r.metrics.get("sar", 0.0) for p, r in zip(phases, runs)) / f_sum              # W/g of magnetic material
 
     # ---- numbers
     cols = st.columns(5 if mode == "ac" else 4)
-    cols[0].metric("Peak magnetisation", f"{met['sat'] * 100:.0f}% of Ms", help="Largest M reached during the loop, relative to Ms.")
-    cols[1].metric("Coercivity Hc", f"{fmt(float(field_to_display(met['Hc'], f_unit)))} {f_unit}",
-                   help="Field at which M crosses zero.")
-    mr_disp = float(moment_to_display(met["mr"] * P["Ms"], m_unit, P))
-    cols[2].metric("Remanence Mr", f"{fmt(mr_disp)} {'Ms' if m_unit == 'M / Ms' else m_unit.split(' ')[0]}",
-                   help="M at zero field.")
-    cols[3].metric("Energy per cycle", f"{fmt(met['area'] / 1e3)} kJ/m³", help="Loop area, μ₀∮M dH, per volume of magnetic material.")
+    cols[0].metric("Peak magnetisation", f"{sat * 100:.0f}% of Ms", help="Largest moment reached, relative to full saturation of all phases.")
+    cols[1].metric("Coercivity Hc", f"{fmt(float(field_to_display(Hc, f_unit)))} {f_unit}", help="Field at which M crosses zero.")
+    cols[2].metric("Remanence Mr", f"{fmt(float(G_disp(Mr, m_unit)))} {SUFFIX[m_unit]}", help="Moment at zero field.")
+    cols[3].metric("Energy per cycle", f"{fmt(energy)} mJ/g", help="Loop area per gram of magnetic material.")
     if mode == "ac":
-        cols[4].metric("Heating power (SAR)", f"{fmt(met['sar'])} W/g", help="Loop area × frequency ÷ density, per gram of magnetic material.")
+        cols[4].metric("Heating power (SAR)", f"{fmt(sar)} W/g", help="Loop area × frequency, per gram of magnetic material.")
 
     # ---- plot
     fig = go.Figure()
-    full = slice(None)
     if mode == "vsm":
-        fig.add_trace(go.Scatter(x=field_to_display(run.H[:run.loop.start + 1], f_unit),
-                                 y=moment_to_display(run.M[:run.loop.start + 1], m_unit, P),
-                                 mode="lines", line=dict(color=SLATE, width=1.5, dash="dot"), name="First magnetisation"))
+        k = loop.start + 1
+        fig.add_trace(go.Scatter(x=field_to_display(H[:k], f_unit), y=G_disp(G[:k], m_unit), mode="lines",
+                                 line=dict(color=SLATE, width=1.5, dash="dot"), name="First magnetisation"))
     elif st.session_state.get("show_all", False) and cycles > 1:
-        fig.add_trace(go.Scatter(x=field_to_display(run.H, f_unit), y=moment_to_display(run.M, m_unit, P),
-                                 mode="lines", line=dict(color=SLATE, width=1, dash="dot"), name="All cycles"))
-    Hl, Ml = run.H[run.loop], run.M[run.loop]
-    fig.add_trace(go.Scatter(x=field_to_display(Hl, f_unit), y=moment_to_display(Ml, m_unit, P), mode="lines",
-                             line=dict(color=TEAL, width=3.5), name="Simulated"))
-
-    # coercivity / remanence markers
-    hc_d = float(field_to_display(met["Hc"], f_unit))
+        fig.add_trace(go.Scatter(x=field_to_display(H, f_unit), y=G_disp(G, m_unit), mode="lines",
+                                 line=dict(color=SLATE, width=1, dash="dot"), name="All cycles"))
+    if two:
+        for gp, p, col, lab in zip(G_parts, phases, (AMBER, PLUM), ("Phase 1 alone", "Phase 2 alone")):
+            fig.add_trace(go.Scatter(x=field_to_display(H[loop], f_unit), y=G_disp(gp[loop], m_unit), mode="lines",
+                                     line=dict(color=col, width=1.8, dash="dash"), name=f"{lab}: {p['name'].split(' (')[0]}"))
+    fig.add_trace(go.Scatter(x=field_to_display(H[loop], f_unit), y=G_disp(G[loop], m_unit), mode="lines",
+                             line=dict(color=TEAL, width=3.5), name="Simulated total" if two else "Simulated"))
+    hc_d = float(field_to_display(Hc, f_unit))
     fig.add_trace(go.Scatter(x=[hc_d, -hc_d], y=[0, 0], mode="markers", marker=dict(color=INK, size=9, symbol="diamond"),
                              name="±Hc", hovertemplate=f"Hc = {fmt(hc_d)} {f_unit}<extra></extra>"))
-    mr_d = float(moment_to_display(met["mr"] * P["Ms"], m_unit, P))
+    mr_d = float(G_disp(Mr, m_unit))
     fig.add_trace(go.Scatter(x=[0, 0], y=[mr_d, -mr_d], mode="markers", marker=dict(color=AMBER, size=9, symbol="square"),
                              name="±Mr", hovertemplate=f"Mr = {fmt(mr_d)}<extra></extra>"))
 
     # ---- optional measured overlay
     with st.expander("Overlay measured data (optional)"):
-        st.caption("Upload a background-corrected loop as CSV or text, pick the columns and units, and it is drawn over the simulation.")
+        st.caption("Upload a loop as CSV or text (background-corrected), pick the columns and units, and it is drawn over the simulation. "
+                   "The VSM software reports emu/g of the whole sample, which is the default here.")
         up = st.file_uploader("Measured loop", type=["csv", "txt", "dat"], label_visibility="collapsed")
         meas = None
         if up is not None:
@@ -205,58 +231,56 @@ with tab_loop:
                 c1, c2, c3, c4 = st.columns(4)
                 hcol = c1.selectbox("Field column", df.columns, index=0)
                 mcol = c2.selectbox("Moment column", df.columns, index=1)
-                hu = c3.selectbox("Field unit", ["Oe", "mT", "T", "kA/m"])
-                mu = c4.selectbox("Moment unit", ["emu", "emu/g (magnetic phase)", "A/m", "M / Ms (normalised)"])
-                H_T = df[hcol].to_numpy() * {"Oe": 1e-4, "mT": 1e-3, "T": 1.0, "kA/m": 1e3 * MU0}[hu]
-                Mraw = df[mcol].to_numpy()
-                M_SI = {"emu": Mraw / P["mag_mass_g"] * rho, "emu/g (magnetic phase)": Mraw * rho,
-                        "A/m": Mraw, "M / Ms (normalised)": Mraw * P["Ms"]}[mu]
-                meas = (H_T / MU0, M_SI)
-                if mu == "emu":
-                    st.caption(f"Using a magnetic mass of {P['mag_mass_g'] * 1e3:.3g} mg (powder mass × magnetic fraction) to convert emu to emu/g.")
+                hu = c3.selectbox("Field unit", ["Oe", "kOe", "mT", "T", "kA/m"])
+                mu = c4.selectbox("Moment unit", ["emu/g (whole sample)", "emu", "emu/g (magnetic material)", "M / Ms (normalised)"])
+                H_T = df[hcol].to_numpy() * {"Oe": 1e-4, "kOe": 1e-1, "mT": 1e-3, "T": 1.0, "kA/m": 1e3 * MU0}[hu]
+                raw = df[mcol].to_numpy()
+                G_meas = {"emu": raw / mass_g, "emu/g (whole sample)": raw,
+                          "emu/g (magnetic material)": raw * frac_tot, "M / Ms (normalised)": raw * G_sat}[mu]
+                meas = (H_T / MU0, G_meas)
             except Exception as err:                                             # noqa: BLE001
                 st.error(f"Could not read that file: {err}")
     if meas is not None:
-        fig.add_trace(go.Scatter(x=field_to_display(meas[0], f_unit), y=moment_to_display(meas[1], m_unit, P), mode="markers",
+        fig.add_trace(go.Scatter(x=field_to_display(meas[0], f_unit), y=G_disp(meas[1], m_unit), mode="markers",
                                  marker=dict(color="rgba(0,0,0,0)", size=6, line=dict(color=INK, width=1.2)), name="Measured"))
 
     fig.add_hline(y=0, line=dict(color="#C9D2DA", width=1))
     fig.add_vline(x=0, line=dict(color="#C9D2DA", width=1))
     fig.update_layout(template="plotly_white", height=540, margin=dict(l=10, r=10, t=10, b=10),
-                      xaxis_title=f"Applied field μ₀H ({f_unit})", yaxis_title=moment_label(m_unit),
-                      legend=dict(orientation="h", y=1.07, x=0), hovermode="closest",
-                      font=dict(color=INK, size=14))
+                      xaxis_title=f"Applied field μ₀H ({f_unit})", yaxis_title=LABEL[m_unit],
+                      legend=dict(orientation="h", y=1.09, x=0), hovermode="closest", font=dict(color=INK, size=14))
     st.plotly_chart(fig, width="stretch")
     if mode == "ac":
         st.checkbox("Also show the start-up cycles", key="show_all")
 
     # ---- plain-language reading of the result
-    Hk_mT = sample.Hk * MU0 * 1e3
-    if mode == "ac":
-        ratio = amp_mT / Hk_mT
-        shape = ("low-field regime: expect a tilted ellipse" if ratio < 0.25 else
-                 "intermediate regime: the ellipse starts to distort" if ratio < 0.6 else
-                 "high-field regime: expect a full hysteresis loop with a clear coercive field")
-        st.markdown(f"**Reading the loop.** The field amplitude is {ratio * 100:.0f}% of the anisotropy field "
-                    f"μ₀H<sub>k</sub> = {Hk_mT:.0f} mT, which is the {shape}.", unsafe_allow_html=True)
-    else:
-        st.markdown(f"**Reading the loop.** The anisotropy field is μ₀H<sub>k</sub> = {Hk_mT:.0f} mT; the sweep goes well past it, "
-                    f"so the loop shows whether the sample reaches saturation.", unsafe_allow_html=True)
-    st.markdown(
-        f"**Which particles can follow the field?** The field changes on a time scale of about {t_txt}. Particles larger than "
-        f"≈{reg['D_block'] * 1e9:.0f} nm have a Néel relaxation time longer than that, so they are blocked and make the loop open. "
-        f"For your size distribution, **{reg['blocked_fraction'] * 100:.0f}%** of the magnetic volume is above that size "
-        f"(median particle: KV/k<sub>B</sub>T = {reg['xi']:.1f}).", unsafe_allow_html=True)
-    if reg["xi"] < 3:
-        st.warning("The median particle has a very small energy barrier (KV/k_BT < 3). The two-level model underestimates the "
-                   "low-field response there, so treat the result as qualitative.")
-    if sample.Hk * MU0 * 1e3 < 5 and mode == "ac":
-        st.info("The anisotropy field is only a few mT, so even small AC fields saturate the sample.")
+    for i, p in enumerate(phases, start=1):
+        s = sample_of(p)
+        Hk_mT = s.Hk * MU0 * 1e3
+        t_meas = 1.0 / (freq_kHz * 1e3) if mode == "ac" else s.Hk * loop_time / (4.0 * H_Apm)
+        t_txt = f"{t_meas * 1e6:.3g} µs" if t_meas < 1e-3 else f"{t_meas:.3g} s"
+        reg = eng.regime(s, t_meas)
+        who = f"**Phase {i} ({p['name'].split(' (')[0]}).** " if two else ""
+        if mode == "ac":
+            ratio = amp_mT / Hk_mT
+            shape = ("low-field regime: expect a tilted ellipse" if ratio < 0.25 else
+                     "intermediate regime: the ellipse starts to distort" if ratio < 0.6 else
+                     "high-field regime: expect a full hysteresis loop with a clear coercive field")
+            line1 = f"The field amplitude is {ratio * 100:.0f}% of its anisotropy field μ₀H<sub>k</sub> = {Hk_mT:.0f} mT, which is the {shape}. "
+        else:
+            reach = hmax_T * 1e3 / Hk_mT
+            line1 = (f"Its anisotropy field is μ₀H<sub>k</sub> = {Hk_mT:.0f} mT and the sweep reaches {reach:.1f} times that"
+                     f"{', so this phase is fully saturated.' if reach > 3 else ', so this phase does not fully saturate.'} ")
+        st.markdown(f"{who}{line1}The field changes on a time scale of about {t_txt}; particles larger than ≈{reg['D_block'] * 1e9:.0f} nm "
+                    f"cannot follow it and are blocked. **{reg['blocked_fraction'] * 100:.0f}%** of this phase's volume is above that size "
+                    f"(median particle KV/k<sub>B</sub>T = {reg['xi']:.1f}).", unsafe_allow_html=True)
+        if reg["xi"] < 3:
+            st.warning(f"Phase {i}: the median particle has a very small energy barrier (KV/k_BT < 3). The two-level model "
+                       "underestimates the low-field response there, so treat the result as qualitative.")
 
-    loop_df = pd.DataFrame({"mu0H_mT": run.H[run.loop] * MU0 * 1e3, "H_Oe": run.H[run.loop] * MU0 * 1e4,
-                            "M_A_per_m": run.M[run.loop], "M_over_Ms": run.M[run.loop] / P["Ms"],
-                            "M_emu_per_g": run.M[run.loop] / rho,
-                            "moment_emu": run.M[run.loop] / rho * P["mag_mass_g"]})
+    loop_df = pd.DataFrame({"mu0H_mT": H[loop] * MU0 * 1e3, "H_Oe": H[loop] * MU0 * 1e4,
+                            "moment_emu_per_g_sample": G[loop], "moment_emu": G[loop] * mass_g,
+                            **{f"phase{i}_emu_per_g_sample": gp[loop] for i, gp in enumerate(G_parts, start=1)}})
     st.download_button("Download simulated loop (CSV)", loop_df.to_csv(index=False), "simulated_loop.csv", "text/csv")
 
 
@@ -273,33 +297,35 @@ with tab_series:
         n_curves = c3.slider("Number of loops", 3, 8, 6)
         amps_mT = np.unique(np.round(np.geomspace(a_min, max(a_max, a_min * 1.5), n_curves), 2))
         with st.spinner("Simulating several fields…"):
-            res = cached_series(P["Ms"], P["K"], P["D"], sigma, rho, T, f0, tuple(float(a * 1e-3 / MU0) for a in amps_mT),
-                                freq_kHz * 1e3, cycles)
+            res = [cached_series(p["Ms"], p["K"], p["D"], p["sigma"], p["rho"], T, f0,
+                                 tuple(float(a * 1e-3 / MU0) for a in amps_mT), freq_kHz * 1e3, cycles) for p in phases]
         colors = sample_colorscale("Viridis", list(np.linspace(0.05, 0.85, len(amps_mT))))
 
         fig2 = go.Figure()
-        for a, (Hs, Ms_, _), col in zip(amps_mT, res, colors):
-            fig2.add_trace(go.Scatter(x=field_to_display(Hs, f_unit), y=moment_to_display(Ms_, m_unit, P), mode="lines",
+        area, hc, mr, sat_ = [], [], [], []
+        for k, (a, col) in enumerate(zip(amps_mT, colors)):
+            Hs = res[0][k][0]
+            Gs = sum(p["f"] * res[i][k][1] / p["rho"] for i, p in enumerate(phases))
+            h_c, m_r, s_ = stats(Hs, Gs)
+            hc.append(float(field_to_display(h_c, f_unit))); mr.append(float(G_disp(m_r, "M / Ms"))); sat_.append(s_)
+            area.append(sum(p["f"] * res[i][k][2]["area"] / p["rho"] for i, p in enumerate(phases)) / f_sum)
+            fig2.add_trace(go.Scatter(x=field_to_display(Hs, f_unit), y=G_disp(Gs, m_unit), mode="lines",
                                       line=dict(color=col, width=2.5), name=f"{a:g} mT"))
         fig2.add_hline(y=0, line=dict(color="#C9D2DA", width=1))
         fig2.add_vline(x=0, line=dict(color="#C9D2DA", width=1))
         fig2.update_layout(template="plotly_white", height=500, margin=dict(l=10, r=10, t=10, b=10),
-                           xaxis_title=f"Applied field μ₀H ({f_unit})", yaxis_title=moment_label(m_unit),
+                           xaxis_title=f"Applied field μ₀H ({f_unit})", yaxis_title=LABEL[m_unit],
                            legend_title="Amplitude", font=dict(color=INK, size=14))
         st.plotly_chart(fig2, width="stretch")
 
-        area = np.array([r[2]["area"] for r in res])
-        hc = np.array([float(field_to_display(r[2]["Hc"], f_unit)) for r in res])
-        mr = np.array([r[2]["mr"] for r in res])
-        sat = np.array([r[2]["sat"] for r in res])
-
-        sub = make_subplots(rows=1, cols=3, subplot_titles=("Energy per cycle (J/m³)", f"Coercivity Hc ({f_unit})",
+        area, hc, mr, sat_ = map(np.array, (area, hc, mr, sat_))
+        sub = make_subplots(rows=1, cols=3, subplot_titles=("Energy per cycle (mJ/g)", f"Coercivity Hc ({f_unit})",
                                                             "Mr and peak M (fraction of Ms)"))
         sub.add_trace(go.Scatter(x=amps_mT, y=area, mode="lines+markers", line=dict(color=TEAL, width=3), name="Loop area"), 1, 1)
         sub.add_trace(go.Scatter(x=amps_mT, y=area[0] * (amps_mT / amps_mT[0]) ** 2, mode="lines",
                                  line=dict(color=SLATE, dash="dash"), name="∝ H² guide"), 1, 1)
         sub.add_trace(go.Scatter(x=amps_mT, y=hc, mode="lines+markers", line=dict(color=INK, width=3), name="Hc", showlegend=False), 1, 2)
-        sub.add_trace(go.Scatter(x=amps_mT, y=sat, mode="lines+markers", line=dict(color=TEAL, width=3), name="M_max / Ms"), 1, 3)
+        sub.add_trace(go.Scatter(x=amps_mT, y=sat_, mode="lines+markers", line=dict(color=TEAL, width=3), name="M_max / Ms"), 1, 3)
         sub.add_trace(go.Scatter(x=amps_mT, y=mr, mode="lines+markers", line=dict(color=AMBER, width=3), name="Mr / Ms"), 1, 3)
         sub.update_xaxes(title_text="Amplitude (mT)", type="log")
         sub.update_yaxes(type="log", row=1, col=1)
@@ -322,11 +348,11 @@ with tab_how:
 | You provide | The model returns |
 |---|---|
 | **Material:** Ms and K (the only material-specific numbers) | The loop **M(H)**: ellipse at low field, hysteresis loop at high field |
-| **Particles:** median size and size spread (from TEM) | **Hc**, **Mr** and how close the sample gets to **saturation** |
-| **Sample:** mass, magnetic fraction, temperature | **Energy per cycle** and **heating power (SAR)** |
-| **Field:** AC amplitude and frequency, or a VSM sweep | The same loop in **emu/g** or **emu**, to compare with your instrument |
+| **Particles:** median size and size spread (from TEM, or an assumption) | **Hc**, **Mr** and how close the sample gets to **saturation** |
+| **Sample:** total mass, magnetic fraction, temperature | **Energy per cycle** and **heating power (SAR)** |
+| **Field:** AC amplitude and frequency, or a VSM sweep | The loop in **emu/g** or **emu**, to compare with your instrument |
 
-Ms is an **input**: it is a property of the material, and you read it from the VSM plateau. Hc, Mr and the loop shape are **outputs**, because they come from the competition between the field, the energy barrier and the thermal energy. K is rarely known for nanoparticles, so a practical use is to adjust K until one measured AC loop is matched, then check that the other amplitudes follow.
+Ms is an **input**: it is a property of the material. Hc, Mr and the loop shape are **outputs**, because they come from the competition between the field, the energy barrier and the thermal energy. K is rarely known for nanoparticles, so a practical use is to adjust K until a measured loop is matched.
 
 ### One particle
 Each particle is a single magnetic domain. Its energy depends on the angle θ of its moment from the easy axis and on the field angle ψ:
@@ -340,16 +366,23 @@ For moderate fields this has two minima (moment along +axis or −axis) separate
 The barriers, the positions of the minima and the field at which a minimum disappears are computed numerically for every angle, so one equation produces both the ellipse and the hysteresis loop.
 
 ### The whole sample
-The program repeats this for 61 particle sizes (log-normal) and 16 easy-axis orientations (random in 3D), and adds them up weighted by volume, which is what a magnetometer measures. The result is multiplied by the magnetic mass to give emu.
+The program repeats this for 61 particle sizes (log-normal) and 16 easy-axis orientations (random in 3D), and adds them up weighted by volume, which is what a magnetometer measures. The result is scaled by the magnetic mass to give emu/g of the whole sample, the quantity your VSM software reports.
+
+### Two phases
+For a mixture, each phase is simulated on its own and the loops are added, weighted by the mass of each phase. A soft phase (small K) flips at low field and a hard phase (large K) only at high field, which produces a kinked or pinched loop. **Exchange coupling between the phases is not included**, so a strongly coupled composite would deviate.
+
+### What matters when the size is unknown
+Particles that are blocked (large KV/k<sub>B</sub>T) give a loop set by K and not by size, so for a hard phase the size hardly matters above a few tens of nm. For a soft phase near the blocking size, the loop changes strongly with size. Try a few sizes and see which features move.
 
 ### The two instruments
-They differ only in the field programme. A **VSM** sweeps slowly to about 1 T, so most particles relax in time and the loop is nearly closed unless particles are large. An **AC magnetometer** oscillates at about 100 kHz, so particles whose relaxation time is longer than the period cannot follow, and the loop opens.
+They differ only in the field programme. A **VSM** sweeps slowly to about 1 T. An **AC magnetometer** oscillates at about 100 kHz, so particles whose relaxation time is longer than the period cannot follow, and the loop opens.
 
 ### What is not included
-- **Interactions** between particles. Dry powders have them; sugar-dispersed samples much less. If a dry powder needs a larger K than the sugar-dispersed one, that is the signature of interactions.
+- **Interactions** between particles, and **exchange coupling** between phases.
 - **Self-heating** during the run (temperature is fixed), and the temperature dependence of Ms and K.
 - **Brownian rotation**, which is irrelevant for immobilised powders but matters in liquids.
 - **Cubic anisotropy**: K is one effective uniaxial number.
+- **Texture**: the model assumes randomly oriented particles, so a pressed cube with aligned platelets will differ along different axes.
 - Very small barriers (KV/k<sub>B</sub>T below about 3), where the two-level picture is rough.
 
 ### Reference

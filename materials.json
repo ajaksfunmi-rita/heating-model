@@ -35,6 +35,20 @@
     "note": "Typical bulk Ms; small anisotropy."
   },
   {
+    "name": "Nickel zinc ferrite NiZnFe2O4",
+    "Ms_kA_m": 300,
+    "K_kJ_m3": 10,
+    "rho_kg_m3": 5350,
+    "note": "Rough nanoparticle values (bulk Ms depends on the Zn content). Soft: small K. Replace with your own."
+  },
+  {
+    "name": "Barium hexaferrite BaFe12O19 (Sc-substituted)",
+    "Ms_kA_m": 380,
+    "K_kJ_m3": 330,
+    "rho_kg_m3": 5300,
+    "note": "Typical bulk values for pure BaM: strongly uniaxial (hard). Sc substitution lowers K and Ms, so replace with your own values for Sc-substituted samples."
+  },
+  {
     "name": "Iron (bcc) Fe",
     "Ms_kA_m": 1710,
     "K_kJ_m3": 48,
